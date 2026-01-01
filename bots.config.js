@@ -6,7 +6,7 @@
 module.exports = {
     // Server settings (shared by all bots)
     server: {
-        host: 'she-demographic.gl.joinmc.link',
+        host: 'compare-complexity.gl.joinmc.link',
         port: 25565,
         protocolVersion: 773,
         version: '1.21.10'

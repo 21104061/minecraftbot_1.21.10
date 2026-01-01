@@ -8,9 +8,9 @@ const { sendHandshake } = require('./states/handshake');
 const { setupLoginHandlers, sendLoginStart } = require('./states/login');
 const { setupConfigurationHandlers } = require('./states/config');
 const { setupPlayHandlers, sendChat } = require('./states/play');
-const { Movement } = require('./movement');
+const { MovementAdvanced } = require('./movement-advanced');
 const { CommandHandler } = require('./commands');
-const { World } = require('./world');
+const { WorldAdvanced } = require('./world-advanced');
 const { EntityTracker } = require('./entities');
 
 class MinecraftClient extends EventEmitter {
@@ -33,7 +33,7 @@ class MinecraftClient extends EventEmitter {
         this.spawnY = null; // Track initial spawn Y to prevent void falling
 
         // World state tracker
-        this.world = new World();
+        this.world = new WorldAdvanced();
 
         // Entity tracker for environmental awareness
         this.entityTracker = new EntityTracker();
@@ -54,7 +54,7 @@ class MinecraftClient extends EventEmitter {
         this.connection = new Connection(this.host, this.port);
 
         // Initialize movement and commands
-        this.movement = new Movement(this, this.connection, this.world);
+        this.movement = new MovementAdvanced(this, this.connection, this.world);
         this.commandHandler = new CommandHandler(this, this.username);
 
         // Setup all state handlers

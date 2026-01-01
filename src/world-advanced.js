@@ -187,7 +187,7 @@ class WorldAdvanced {
         if (blockId === 0) return false;  // Air = not solid
 
         const props = this.parser.getBlockProperties(blockId);
-        return props.solid;
+        return props ? props.solid : true;  // Fallback to solid if props unknown
     }
 
     /**
@@ -225,10 +225,17 @@ class WorldAdvanced {
      * @param {number} x
      * @param {number} y - Feet position
      * @param {number} z
-     * @param {boolean} pathfindingMode - If true, treat unloaded as passable
+     * @param {boolean} pathfindingMode - If true, treat unloaded as walkable
      * @returns {boolean}
      */
     isWalkable(x, y, z, pathfindingMode = false) {
+        // FIX: "Unloaded Floor Paradox" - if pathfinding and chunk is unloaded,
+        // assume the position is walkable. This allows long-distance path planning.
+        const blockId = this.getBlock(x, y, z);
+        if (blockId === -1 && pathfindingMode) {
+            return true; // Trust that unloaded areas are navigable
+        }
+
         // Must have solid ground below
         const hasFloor = this.isSolid(x, y - 1, z, pathfindingMode);
 

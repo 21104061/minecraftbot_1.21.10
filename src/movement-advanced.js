@@ -255,6 +255,16 @@ class MovementAdvanced {
     performMovement(waypoint) {
         const current = this.client.position;
 
+        // Chunk Anticipation: pause if next waypoint is in an unloaded chunk
+        const waypointChunkX = Math.floor(waypoint.x / 16);
+        const waypointChunkZ = Math.floor(waypoint.z / 16);
+        if (!this.world.isChunkLoaded(waypointChunkX, waypointChunkZ)) {
+            logger.debug('[Movement] Waiting for chunk to load...');
+            this.velocity.x = 0;
+            this.velocity.z = 0;
+            return; // Don't move until chunk is loaded
+        }
+
         // Gravity
         if (!this.onGround) {
             this.velocity.y -= this.gravity;

@@ -28,6 +28,7 @@ class AdvancedPathfinder {
 
         const fullPath = [];
         let current = start;
+        let lastSuccessfulWaypoint = start;
 
         for (let i = 0; i < waypoints.length; i++) {
             const target = waypoints[i];
@@ -36,21 +37,32 @@ class AdvancedPathfinder {
             const segment = this.astar(current, target, { ...options, maxNodes: 10000 });
 
             if (!segment || segment.length === 0) {
-                logger.warn(`[Pathfinder] Failed to reach waypoint ${i + 1}`);
+                logger.warn(`[Pathfinder] Failed to reach waypoint ${i + 1} at (${target.x}, ${target.y}, ${target.z})`);
+                
+                // Soft Goal Fallback: Try to reach next waypoint before giving up
                 if (i < waypoints.length - 1) {
                     const bypass = this.astar(current, waypoints[i + 1], { ...options, maxNodes: 15000 });
                     if (bypass && bypass.length > 0) {
+                        logger.info(`[Pathfinder] Bypassed failed waypoint, continuing`);
                         fullPath.push(...bypass);
                         current = waypoints[i + 1];
+                        lastSuccessfulWaypoint = waypoints[i + 1];
                         i++;
                         continue;
                     }
                 }
-                return fullPath.length > 0 ? fullPath : null;
+                
+                // If still no path and we have a partial path, return what we have
+                if (fullPath.length > 0) {
+                    logger.warn(`[Pathfinder] Returning partial path of ${fullPath.length} nodes (reached ${this.distance3D(start, lastSuccessfulWaypoint).toFixed(1)}m)`);
+                    return fullPath;
+                }
+                return null;
             }
 
             fullPath.push(...segment);
             current = target;
+            lastSuccessfulWaypoint = target;
         }
 
         logger.info(`[Pathfinder] Hierarchical path complete: ${fullPath.length} nodes`);
@@ -268,35 +280,52 @@ class AdvancedPathfinder {
     }
 
     /**
-     * Fix 2: Find nearby walkable position (3x3x3 radial search)
+     * Fix 2: Find nearby walkable position (radial search with pathfinding mode)
      */
     findNearbyWalkable(pos) {
-        // Search in expanding rings: same level first, then up, then down
+        // First check current position with pathfinding mode
+        if (this.world.isWalkable(pos.x, pos.y, pos.z, true)) {
+            return pos;
+        }
+
+        // Search downward first (most likely to find floor)
+        for (let dy = -1; dy >= -3; dy--) {
+            const check = { x: pos.x, y: pos.y + dy, z: pos.z };
+            if (this.world.isWalkable(check.x, check.y, check.z, true)) {
+                return check;
+            }
+        }
+
+        // Search in expanding rings: same level, then up, then down
         for (let dy = 0; dy <= 2; dy++) {
             for (let dx = -1; dx <= 1; dx++) {
                 for (let dz = -1; dz <= 1; dz++) {
                     if (dx === 0 && dy === 0 && dz === 0) continue;
                     const check = { x: pos.x + dx, y: pos.y + dy, z: pos.z + dz };
-                    if (this.world.isWalkable(check.x, check.y, check.z)) {
+                    if (this.world.isWalkable(check.x, check.y, check.z, true)) {
                         return check;
                     }
                 }
             }
         }
-        // Check below as well
-        for (let dy = -1; dy >= -2; dy--) {
+
+        // Check below in wider area
+        for (let dy = -1; dy >= -3; dy--) {
             for (let dx = -1; dx <= 1; dx++) {
                 for (let dz = -1; dz <= 1; dz++) {
+                    if (dx === 0 && dz === 0) continue; // Already checked directly below
                     const check = { x: pos.x + dx, y: pos.y + dy, z: pos.z + dz };
-                    if (this.world.isWalkable(check.x, check.y, check.z)) {
+                    if (this.world.isWalkable(check.x, check.y, check.z, true)) {
                         return check;
                     }
                 }
             }
         }
-        return null;
-    }
 
+        // Last resort: use current position anyway with pathfinding mode assumption
+        logger.warn('[Pathfinder] No walkable found, using start position anyway');
+        return pos;
+    }
     heuristic(a, b) { return this.distance3D(a, b); }
 
     distance3D(a, b) {

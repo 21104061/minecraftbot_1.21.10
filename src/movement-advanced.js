@@ -43,6 +43,14 @@ class MovementAdvanced {
         this.maxStuckTicks = 60;
         this.jumpQueued = false;
         this.jumpCooldown = 0;
+
+        // Feature 3: 4-Stage obstacle avoidance
+        this.obstacleStage = 0;
+        this.lateralDirection = 1; // 1 = right, -1 = left
+        this.backupTicks = 0;
+
+        // Feature 5: Movement smoothing
+        this.maxTurnSpeed = 18; // degrees per tick
     }
 
     async goto(x, y, z) {
@@ -136,14 +144,11 @@ class MovementAdvanced {
         const moveDist = this.distance3D(this.client.position, this.lastPosition);
         if (moveDist < 0.05) {
             this.stuckCounter++;
-            if (this.stuckCounter >= this.maxStuckTicks) {
-                logger.warn('[Movement] Stuck - recalculating...');
-                this.stuckCounter = 0;
-                this.calculatePath();
-                return;
-            }
+            // Feature 3: 4-stage obstacle avoidance
+            this.handleObstacle();
         } else {
             this.stuckCounter = 0;
+            this.obstacleStage = 0;
         }
 
         if (this.currentPathIndex + 1 < this.path.length) {
@@ -154,6 +159,97 @@ class MovementAdvanced {
         }
 
         this.performMovement(waypoint);
+    }
+
+    /**
+     * Feature 3: 4-Stage obstacle avoidance system
+     */
+    handleObstacle() {
+        if (this.stuckCounter >= 5 && this.stuckCounter < 16) {
+            // Stage 1: Jump (ticks 5-15)
+            if (this.obstacleStage < 1) {
+                this.obstacleStage = 1;
+                logger.debug('[Movement] Obstacle Stage 1: Attempting jump');
+            }
+            if (this.onGround) {
+                this.jumpQueued = true;
+            }
+        } else if (this.stuckCounter >= 16 && this.stuckCounter < 31) {
+            // Stage 2: Lateral strafe (ticks 16-30)
+            if (this.obstacleStage < 2) {
+                this.obstacleStage = 2;
+                logger.info('[Movement] Obstacle Stage 2: Lateral strafe');
+            }
+            this.performLateralMove();
+        } else if (this.stuckCounter >= 31 && this.stuckCounter < 46) {
+            // Stage 3: Backup (ticks 31-45)
+            if (this.obstacleStage < 3) {
+                this.obstacleStage = 3;
+                this.backupTicks = 15;
+                logger.info('[Movement] Obstacle Stage 3: Backing up');
+            }
+            this.performBackup();
+        } else if (this.stuckCounter >= 46) {
+            // Stage 4: Reroute (tick 46+)
+            if (this.obstacleStage < 4) {
+                this.obstacleStage = 4;
+                logger.warn('[Movement] Obstacle Stage 4: Recalculating path');
+            }
+            this.stuckCounter = 0;
+            this.obstacleStage = 0;
+            // Try skipping to next waypoint first
+            if (this.currentPathIndex + 1 < this.path.length) {
+                logger.info('[Movement] Skipping to next waypoint');
+                this.currentPathIndex++;
+            } else {
+                this.calculatePath();
+            }
+        }
+    }
+
+    /**
+     * Stage 2: Move perpendicular to current heading
+     */
+    performLateralMove() {
+        if (!this.client.position) return;
+
+        const current = this.client.position;
+        const yawRad = (this.yaw * Math.PI) / 180;
+
+        // Perpendicular direction
+        const strafeX = Math.cos(yawRad) * this.lateralDirection * 0.3;
+        const strafeZ = Math.sin(yawRad) * this.lateralDirection * 0.3;
+
+        const newX = current.x + strafeX;
+        const newZ = current.z + strafeZ;
+
+        // Alternate direction for next attempt
+        if (this.stuckCounter % 5 === 0) {
+            this.lateralDirection *= -1;
+        }
+
+        // Apply strafe movement
+        this.client.position = { x: newX, y: current.y, z: newZ };
+        this.sendPosition(newX, current.y, newZ, this.yaw, 0, this.onGround);
+    }
+
+    /**
+     * Stage 3: Move backward to clear collision
+     */
+    performBackup() {
+        if (!this.client.position || this.backupTicks <= 0) return;
+
+        const current = this.client.position;
+        const yawRad = (this.yaw * Math.PI) / 180;
+
+        // Move backward (opposite of facing direction)
+        const backX = current.x + Math.sin(yawRad) * 0.2;
+        const backZ = current.z - Math.cos(yawRad) * 0.2;
+
+        this.client.position = { x: backX, y: current.y, z: backZ };
+        this.sendPosition(backX, current.y, backZ, this.yaw, 0, this.onGround);
+
+        this.backupTicks--;
     }
 
     performMovement(waypoint) {
@@ -233,7 +329,21 @@ class MovementAdvanced {
 
         this.onGround = finalMoveY > yBefore && yBefore < 0;
 
-        if (hDist > 0.01) this.yaw = -Math.atan2(dx, dz) * (180 / Math.PI);
+        // Feature 5: Angular interpolation for yaw (smooth turning)
+        if (hDist > 0.01) {
+            const targetYaw = -Math.atan2(dx, dz) * (180 / Math.PI);
+            let yawDiff = targetYaw - this.yaw;
+
+            // Normalize to -180 to 180
+            while (yawDiff > 180) yawDiff -= 360;
+            while (yawDiff < -180) yawDiff += 360;
+
+            // Limit turn speed for smooth rotation
+            if (Math.abs(yawDiff) > this.maxTurnSpeed) {
+                yawDiff = Math.sign(yawDiff) * this.maxTurnSpeed;
+            }
+            this.yaw += yawDiff;
+        }
 
         this.client.position = { x: newX, y: newY, z: newZ };
         this.client.rotation = { yaw: this.yaw, pitch: 0 };

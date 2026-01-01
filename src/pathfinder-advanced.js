@@ -69,8 +69,17 @@ class AdvancedPathfinder {
                 y: Math.floor(start.y + (goal.y - start.y) * t),
                 z: Math.floor(start.z + (goal.z - start.z) * t)
             };
-            const groundY = this.world.findFloorBelow(waypoint.x, waypoint.y + 5, waypoint.z, 20);
-            if (groundY !== -1) waypoint.y = groundY;
+
+            // Fix 6: Dynamic waypoint snapping - check if chunk is loaded first
+            const chunkX = Math.floor(waypoint.x / 16);
+            const chunkZ = Math.floor(waypoint.z / 16);
+
+            if (this.world.isChunkLoaded(chunkX, chunkZ)) {
+                const groundY = this.world.findFloorBelow(waypoint.x, waypoint.y + 5, waypoint.z, 20);
+                if (groundY !== -1) waypoint.y = groundY;
+            }
+            // If chunk not loaded, keep interpolated Y (waypoint.y stays as linear interpolation)
+
             waypoints.push(waypoint);
         }
         return waypoints;
@@ -84,9 +93,21 @@ class AdvancedPathfinder {
         start = this.roundPos(start);
         goal = this.roundPos(goal);
 
+        // Fix 2: Soft-start node search - find walkable position if start isn't walkable
+        if (!this.world.isWalkable(start.x, start.y, start.z)) {
+            const adjusted = this.findNearbyWalkable(start);
+            if (adjusted) {
+                logger.info(`[Pathfinder] Adjusted start from (${start.x},${start.y},${start.z}) to (${adjusted.x},${adjusted.y},${adjusted.z})`);
+                start = adjusted;
+            } else {
+                logger.warn(`[Pathfinder] Could not find walkable start position`);
+            }
+        }
+
         // Debug: Check if start position is walkable
         const startWalkable = this.world.isWalkable(start.x, start.y, start.z);
-        const goalWalkable = this.world.isWalkable(goal.x, goal.y, goal.z);
+        // Use pathfindingMode=true for goal check (may be in unloaded chunk)
+        const goalWalkable = this.world.isWalkable(goal.x, goal.y, goal.z, true);
         logger.info(`[Pathfinder] Start (${start.x}, ${start.y}, ${start.z}) walkable: ${startWalkable}`);
         logger.info(`[Pathfinder] Goal (${goal.x}, ${goal.y}, ${goal.z}) walkable: ${goalWalkable}`);
 
@@ -196,26 +217,84 @@ class AdvancedPathfinder {
 
     tryMove(from, targetX, targetZ, neighbors) {
         const sameLevel = { x: targetX, y: from.y, z: targetZ };
-        if (this.world.isWalkable(sameLevel.x, sameLevel.y, sameLevel.z)) {
-            neighbors.push({ pos: sameLevel, cost: this.world.getMovementCost(sameLevel.x, sameLevel.y, sameLevel.z), action: 'walk' });
+
+        // Feature 4: Hazard avoidance - skip lava entirely
+        if (this.world.isLava && this.world.isLava(sameLevel.x, sameLevel.y, sameLevel.z)) {
+            return; // Lava = infinite cost (don't even consider)
+        }
+
+        // Use pathfindingMode=true to allow routing through unloaded chunks
+        if (this.world.isWalkable(sameLevel.x, sameLevel.y, sameLevel.z, true)) {
+            let cost = this.world.getMovementCost(sameLevel.x, sameLevel.y, sameLevel.z);
+
+            // High cost for water (but allow if needed)
+            if (this.world.isFluid(sameLevel.x, sameLevel.y, sameLevel.z)) {
+                cost += 8.0; // Prefer dry land
+            }
+
+            neighbors.push({ pos: sameLevel, cost, action: 'walk' });
         }
 
         if (this.world.canJump(from.x, from.y, from.z)) {
             const jumpUp = { x: targetX, y: from.y + 1, z: targetZ };
-            if (this.world.isWalkable(jumpUp.x, jumpUp.y, jumpUp.z)) {
-                neighbors.push({ pos: jumpUp, cost: 1.3 * this.world.getMovementCost(jumpUp.x, jumpUp.y, jumpUp.z), action: 'jump' });
+
+            // Skip lava for jumps too
+            if (this.world.isLava && this.world.isLava(jumpUp.x, jumpUp.y, jumpUp.z)) {
+                // Don't add this neighbor
+            } else if (this.world.isWalkable(jumpUp.x, jumpUp.y, jumpUp.z, true)) {
+                let cost = 1.3 * this.world.getMovementCost(jumpUp.x, jumpUp.y, jumpUp.z);
+                if (this.world.isFluid(jumpUp.x, jumpUp.y, jumpUp.z)) cost += 8.0;
+                neighbors.push({ pos: jumpUp, cost, action: 'jump' });
             }
         }
 
         for (let fall = 1; fall <= this.maxFallDistance; fall++) {
             const fallDown = { x: targetX, y: from.y - fall, z: targetZ };
-            if (!this.world.isSolid(fallDown.x, fallDown.y - 1, fallDown.z)) continue;
-            if (this.world.isWalkable(fallDown.x, fallDown.y, fallDown.z)) {
-                neighbors.push({ pos: fallDown, cost: (1.0 + fall * 0.2) * this.world.getMovementCost(fallDown.x, fallDown.y, fallDown.z), action: `fall_${fall}` });
+
+            // Skip lava for falls
+            if (this.world.isLava && this.world.isLava(fallDown.x, fallDown.y, fallDown.z)) {
+                break; // Don't fall into lava
+            }
+
+            if (!this.world.isSolid(fallDown.x, fallDown.y - 1, fallDown.z, true)) continue;
+            if (this.world.isWalkable(fallDown.x, fallDown.y, fallDown.z, true)) {
+                let cost = (1.0 + fall * 0.2) * this.world.getMovementCost(fallDown.x, fallDown.y, fallDown.z);
+                if (this.world.isFluid(fallDown.x, fallDown.y, fallDown.z)) cost += 8.0;
+                neighbors.push({ pos: fallDown, cost, action: `fall_${fall}` });
                 break;
             }
             break;
         }
+    }
+
+    /**
+     * Fix 2: Find nearby walkable position (3x3x3 radial search)
+     */
+    findNearbyWalkable(pos) {
+        // Search in expanding rings: same level first, then up, then down
+        for (let dy = 0; dy <= 2; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dz = -1; dz <= 1; dz++) {
+                    if (dx === 0 && dy === 0 && dz === 0) continue;
+                    const check = { x: pos.x + dx, y: pos.y + dy, z: pos.z + dz };
+                    if (this.world.isWalkable(check.x, check.y, check.z)) {
+                        return check;
+                    }
+                }
+            }
+        }
+        // Check below as well
+        for (let dy = -1; dy >= -2; dy--) {
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dz = -1; dz <= 1; dz++) {
+                    const check = { x: pos.x + dx, y: pos.y + dy, z: pos.z + dz };
+                    if (this.world.isWalkable(check.x, check.y, check.z)) {
+                        return check;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     heuristic(a, b) { return this.distance3D(a, b); }

@@ -174,12 +174,16 @@ class WorldAdvanced {
      * @param {number} x
      * @param {number} y
      * @param {number} z
+     * @param {boolean} pathfindingMode - If true, treat unloaded as passable
      * @returns {boolean}
      */
-    isSolid(x, y, z) {
+    isSolid(x, y, z, pathfindingMode = false) {
         const blockId = this.getBlock(x, y, z);
 
-        if (blockId === -1) return true;  // Unloaded = treat as solid
+        if (blockId === -1) {
+            // Unloaded chunk: solid for actual movement, passable for path planning
+            return !pathfindingMode;
+        }
         if (blockId === 0) return false;  // Air = not solid
 
         const props = this.parser.getBlockProperties(blockId);
@@ -221,15 +225,16 @@ class WorldAdvanced {
      * @param {number} x
      * @param {number} y - Feet position
      * @param {number} z
+     * @param {boolean} pathfindingMode - If true, treat unloaded as passable
      * @returns {boolean}
      */
-    isWalkable(x, y, z) {
+    isWalkable(x, y, z, pathfindingMode = false) {
         // Must have solid ground below
-        const hasFloor = this.isSolid(x, y - 1, z);
+        const hasFloor = this.isSolid(x, y - 1, z, pathfindingMode);
 
         // Must have air at feet and head
-        const feetClear = !this.isSolid(x, y, z);
-        const headClear = !this.isSolid(x, y + 1, z);
+        const feetClear = !this.isSolid(x, y, z, pathfindingMode);
+        const headClear = !this.isSolid(x, y + 1, z, pathfindingMode);
 
         return hasFloor && feetClear && headClear;
     }
@@ -268,14 +273,24 @@ class WorldAdvanced {
      * @param {number} x
      * @param {number} y
      * @param {number} z
-     * @returns {number} Cost multiplier (1.0 = normal, higher = avoid)
+     * @returns {object} Cost info: { cost, wallCount, isUnloaded }
      */
     getMovementCost(x, y, z) {
         let cost = 1.0;
+        let isUnloaded = false;
 
-        // Check for hazards
-        if (this.isFluid(x, y, z)) cost += 2.0;      // Water/lava penalty
-        if (this.isFluid(x, y - 1, z)) cost += 1.5;  // Standing in fluid
+        // Check if in unloaded chunk - high cost to prefer known paths
+        const blockId = this.getBlock(x, y, z);
+        if (blockId === -1) {
+            cost += 5.0;  // Heavy penalty for unloaded areas
+            isUnloaded = true;
+        }
+
+        // Check for hazards (only if chunk is loaded)
+        if (!isUnloaded) {
+            if (this.isFluid(x, y, z)) cost += 2.0;      // Water/lava penalty
+            if (this.isFluid(x, y - 1, z)) cost += 1.5;  // Standing in fluid
+        }
 
         // Prefer paths with nearby walls (safer)
         let wallCount = 0;
@@ -288,6 +303,21 @@ class WorldAdvanced {
         if (wallCount === 0) cost += 0.5; // Open space penalty (risk of falling)
 
         return cost;
+    }
+
+    /**
+     * Check if block is lava (for hazard avoidance)
+     * @param {number} x
+     * @param {number} y
+     * @param {number} z
+     * @returns {boolean}
+     */
+    isLava(x, y, z) {
+        const blockId = this.getBlock(x, y, z);
+        if (blockId <= 0) return false;
+        // Lava block state IDs in vanilla MC 1.21 are typically 118-133
+        // Stationary lava is around 118, flowing lava 119-133
+        return blockId >= 118 && blockId <= 133;
     }
 
     /**

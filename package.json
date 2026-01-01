@@ -1,0 +1,10 @@
+{
+    "name": "minecraft-protocol-773",
+    "version": "1.0.0",
+    "description": "Custom Minecraft protocol 773 client for Java 1.21.10",
+    "main": "bot.js",
+    "scripts": {
+        "start": "node bot.js"
+    },
+    "dependencies": {}
+}

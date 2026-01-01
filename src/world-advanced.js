@@ -36,18 +36,27 @@ class WorldAdvanced {
     storeChunk(chunkX, chunkZ, data) {
         const key = this.chunkKey(chunkX, chunkZ);
 
-        // Parse chunk data
-        const parsed = this.parser.parseChunkData(data);
-        if (!parsed) {
-            // Log parsing stats periodically
-            const stats = this.parser.getStats();
-            if (stats.failed <= 5 || stats.failed % 50 === 0) {
-                console.log(`[World] Parse failed (${chunkX}, ${chunkZ}) - Success rate: ${(stats.successRate * 100).toFixed(1)}%`);
-            }
-            return;
+        // Parse chunk data with fallback
+        let parsed = null;
+        try {
+            parsed = this.parser.parseChunkData(data);
+        } catch (e) {
+            console.warn(`[World] Parser threw for chunk (${chunkX}, ${chunkZ}): ${e.message}`);
         }
 
-        // Store chunk
+        if (!parsed) {
+            // Fallback: mark chunk as loaded with empty sections (assume air)
+            // This allows pathfinder to route through rather than treating as solid wall
+            parsed = { sections: [] };
+
+            // Log periodically (not every chunk to avoid spam)
+            const stats = this.parser.getStats();
+            if (stats.failed <= 5 || stats.failed % 50 === 0) {
+                console.log(`[World] Chunk (${chunkX}, ${chunkZ}) parse failed - using empty fallback. Success rate: ${(stats.successRate * 100).toFixed(1)}%`);
+            }
+        }
+
+        // Store chunk (even if empty - this marks it as "loaded")
         this.chunks.set(key, {
             x: chunkX,
             z: chunkZ,
@@ -62,9 +71,10 @@ class WorldAdvanced {
 
         // Log success periodically
         if (this.stats.chunksLoaded <= 3 || this.stats.chunksLoaded % 20 === 0) {
-            console.log(`[World] ✓ Chunk (${chunkX}, ${chunkZ}) - ${parsed.sections.length} sections, ${this.stats.chunksLoaded} total loaded`);
+            console.log(`[World] ✓ Chunk (${chunkX}, ${chunkZ}) loaded - ${parsed.sections.length} sections, ${this.stats.chunksLoaded} total`);
         }
     }
+
 
 
     /**
@@ -135,8 +145,19 @@ class WorldAdvanced {
         const chunkX = Math.floor(bx / 16);
         const chunkZ = Math.floor(bz / 16);
 
-        if (!this.isChunkLoaded(chunkX, chunkZ)) {
-            return -1; // Unloaded
+        const chunkKey = this.chunkKey(chunkX, chunkZ);
+        const chunk = this.chunks.get(chunkKey);
+
+        if (!chunk) {
+            return -1; // Chunk not received yet
+        }
+
+        // Check if chunk has actual section data
+        // Chunks with 0 sections are considered "empty" (all air above void)
+        if (!chunk.sections || chunk.sections.length === 0) {
+            // For empty chunks, assume it's all air (sky chunks, void areas, etc.)
+            // This allows pathfinding through open areas
+            return 0;
         }
 
         // Fast lookup from cache
@@ -146,6 +167,7 @@ class WorldAdvanced {
         // If not in cache, it's air (we only cache non-air blocks)
         return blockStateId !== undefined ? blockStateId : 0;
     }
+
 
     /**
      * Check if block is solid (impassable)

@@ -4,6 +4,16 @@
  */
 
 const { readVarInt } = require('./protocol/varint');
+const fs = require('fs');
+
+// Debug log file
+const debugLogPath = './chunk-debug.log';
+function debugLog(msg) {
+    fs.appendFileSync(debugLogPath, `${new Date().toISOString()} ${msg}\n`);
+}
+// Clear log on startup
+fs.writeFileSync(debugLogPath, `=== Chunk Parser Debug Log ===\n`);
+
 
 class ChunkParser {
     constructor() {
@@ -59,7 +69,7 @@ class ChunkParser {
 
         this.failedParses++;
         if (this.debugMode && this.failedParses <= 5) {
-            console.log(`[ChunkParser] All strategies failed. First 32 bytes: ${data.slice(0, Math.min(32, data.length)).toString('hex')}`);
+            debugLog(`All strategies failed. First 32 bytes: ${data.slice(0, Math.min(32, data.length)).toString('hex')}`);
         }
         return null;
     }
@@ -151,21 +161,33 @@ class ChunkParser {
         try {
             // Read Data array size
             const sizeResult = readVarInt(data, offset);
-            if (sizeResult.value <= 0) return null;
+            if (sizeResult.value <= 0) {
+                if (this.debugMode && this.successfulParses < 3) {
+                    debugLog(`Data size is ${sizeResult.value} at offset ${offset}`);
+                }
+                return null;
+            }
             offset += sizeResult.bytesRead;
 
             const dataSize = sizeResult.value;
             if (offset + dataSize > data.length) {
+                if (this.debugMode && this.successfulParses < 3) {
+                    debugLog(`Data size ${dataSize} exceeds buffer length ${data.length - offset}`);
+                }
                 return null;
             }
 
             const chunkData = data.slice(offset, offset + dataSize);
 
+            if (this.debugMode && this.successfulParses < 3) {
+                debugLog(`Chunk data size: ${dataSize}, first 10 bytes: ${chunkData.slice(0, 10).toString('hex')}`);
+            }
+
             // Parse sections
             const sections = this.parseSections(chunkData);
 
             if (this.debugMode && this.successfulParses < 3) {
-                console.log(`[ChunkParser] SUCCESS: Parsed ${sections.length} sections from ${dataSize} bytes`);
+                debugLog(`SUCCESS: Parsed ${sections.length} sections from ${dataSize} bytes`);
             }
 
             return {
@@ -173,6 +195,7 @@ class ChunkParser {
                 heightmaps: null,
                 blockEntities: []
             };
+
         } catch (e) {
             return null;
         }
@@ -270,7 +293,7 @@ class ChunkParser {
         let offset = 0;
 
         if (this.debugMode && this.successfulParses <= 3) {
-            console.log(`[ChunkParser] Parsing sections from ${data.length} bytes of data`);
+            debugLog(`Parsing sections from ${data.length} bytes of data`);
         }
 
         while (offset < data.length && sections.length < 24) {
@@ -278,7 +301,7 @@ class ChunkParser {
                 const section = this.parseSection(data, offset);
                 if (!section) {
                     if (this.debugMode && this.successfulParses <= 3) {
-                        console.log(`[ChunkParser] Section parse failed at offset ${offset}, data remaining: ${data.length - offset}`);
+                        debugLog(`Section parse failed at offset ${offset}, data remaining: ${data.length - offset}`);
                     }
                     break;
                 }
@@ -286,7 +309,7 @@ class ChunkParser {
                 offset = section.nextOffset;
             } catch (e) {
                 if (this.debugMode && this.successfulParses <= 3) {
-                    console.log(`[ChunkParser] Section exception at offset ${offset}: ${e.message}`);
+                    debugLog(`Section exception at offset ${offset}: ${e.message}`);
                 }
                 break;
             }

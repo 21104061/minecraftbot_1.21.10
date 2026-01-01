@@ -84,6 +84,18 @@ class AdvancedPathfinder {
         start = this.roundPos(start);
         goal = this.roundPos(goal);
 
+        // Debug: Check if start position is walkable
+        const startWalkable = this.world.isWalkable(start.x, start.y, start.z);
+        const goalWalkable = this.world.isWalkable(goal.x, goal.y, goal.z);
+        logger.info(`[Pathfinder] Start (${start.x}, ${start.y}, ${start.z}) walkable: ${startWalkable}`);
+        logger.info(`[Pathfinder] Goal (${goal.x}, ${goal.y}, ${goal.z}) walkable: ${goalWalkable}`);
+
+        // Debug: check blocks at start position
+        const startFeet = this.world.isSolid(start.x, start.y, start.z);
+        const startHead = this.world.isSolid(start.x, start.y + 1, start.z);
+        const startFloor = this.world.isSolid(start.x, start.y - 1, start.z);
+        logger.info(`[Pathfinder] Start blocks - feet:${startFeet}, head:${startHead}, floor:${startFloor}`);
+
         const openSet = new MinHeap((a, b) => a.f < b.f);
         const closedSet = new Set();
         const inOpenSet = new Set();
@@ -110,7 +122,7 @@ class AdvancedPathfinder {
             inOpenSet.delete(currentKey);
 
             if (currentKey === goalKey || this.distance3D(current.pos, goal) < 2) {
-                logger.debug(`[Pathfinder] Path found! Nodes: ${nodesExpanded}`);
+                logger.info(`[Pathfinder] Path found! Nodes: ${nodesExpanded}`);
                 return this.reconstructPath(cameFrom, current.pos);
             }
 
@@ -118,11 +130,18 @@ class AdvancedPathfinder {
             nodesExpanded++;
 
             if (nodesExpanded >= maxNodes) {
-                logger.warn(`[Pathfinder] Node limit reached`);
+                logger.warn(`[Pathfinder] Node limit reached (${nodesExpanded})`);
                 break;
             }
 
-            for (const neighbor of this.getNeighbors(current.pos)) {
+            const neighbors = this.getNeighbors(current.pos);
+
+            // Debug: Log first few expansions
+            if (nodesExpanded <= 3) {
+                logger.debug(`[Pathfinder] Node ${nodesExpanded}: (${current.pos.x}, ${current.pos.y}, ${current.pos.z}) has ${neighbors.length} neighbors`);
+            }
+
+            for (const neighbor of neighbors) {
                 const neighborKey = this.posKey(neighbor.pos);
                 if (closedSet.has(neighborKey)) continue;
 
@@ -142,9 +161,10 @@ class AdvancedPathfinder {
             }
         }
 
-        logger.warn(`[Pathfinder] No path found`);
+        logger.warn(`[Pathfinder] No path found after ${nodesExpanded} nodes`);
         return null;
     }
+
 
     getNeighbors(pos) {
         const neighbors = [];
